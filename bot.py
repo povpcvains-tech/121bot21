@@ -2151,7 +2151,23 @@ async def global_filter(message: Message):
         log_action(user_id, "unknown_message", f"Chat: {chat_type}, Text: {message.text[:100]}")
 
 # ================== ЗАПУСК ==================
+async def health_handler(request):
+    """Простой эндпоинт для проверки здоровья сервиса"""
+    return web.Response(text="OK", status=200)
+
+async def run_webserver_stub(port: int):
+    """Запускает минимальный HTTP-сервер для Render"""
+    app = web.Application()
+    app.add_routes([web.get('/', health_handler), web.get('/health', health_handler)])
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, host='0.0.0.0', port=port)
+    await site.start()
+    logging.info(f"🔌 Web stub server started on port {port}")
+    return runner
+
 async def main():
+    # Инициализация файлов и настроек (ваш существующий код)
     for file, default in [
         (ADMINS_FILE, [ROOT_USER_ID]),
         (MODERATORS_FILE, []),
@@ -2163,22 +2179,32 @@ async def main():
     ]:
         if not os.path.exists(file):
             save_json(file, default)
+    
     admins = load_json(ADMINS_FILE, [])
     if ROOT_USER_ID not in admins:
         admins.append(ROOT_USER_ID)
         save_json(ADMINS_FILE, admins)
         log_action(ROOT_USER_ID, "root_auto_added", "ROOT автоматически добавлен в админы")
+    
     if not os.path.exists(SETTINGS_FILE):
         save_settings(DEFAULT_SETTINGS.copy())
+    
     await bot.delete_webhook(drop_pending_updates=True)
+    
+    # 🔥 Запуск HTTP-заглушки для Render
+    port = int(os.getenv("PORT", 8000))
+    web_runner = await run_webserver_stub(port)
+    
     logging.info("БОТ ЗАПУЩЕН 🟢")
     logging.info(f"ROOT Пользователь: {ROOT_USER_ID}")
     logging.info("Бот работает в личных сообщениях и группах!")
+    logging.info(f"Web stub listening on port {port} for Render health checks")
+    
     try:
+        # 🔁 Запускаем long polling (основная логика бота)
         await dp.start_polling(bot)
     finally:
+        # 🧹 Корректная остановка
+        await web_runner.cleanup()
         await bot.session.close()
-
-if __name__ == "__main__":
-    import asyncio  
-    asyncio.run(main())
+        logging.info("Бот остановлен")
