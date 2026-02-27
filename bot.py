@@ -5,7 +5,6 @@ import sys
 import asyncio
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
-from aiohttp import web 
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.types import (
     Message, CallbackQuery, KeyboardButton,
@@ -2150,62 +2149,36 @@ async def global_filter(message: Message):
     # Логирование неизвестных команд
     if message.text and not message.text.startswith('/'):
         log_action(user_id, "unknown_message", f"Chat: {chat_type}, Text: {message.text[:100]}")
-# ================== ВЕБ-СЕРВЕР ДЛЯ RENDER ==================
-async def health_handler(request):
-    """Эндпоинт для проверки здоровья сервиса Render"""
-    return web.Response(text="OK", status=200)
 
-async def run_webserver_stub(port: int):
-    """Запускает минимальный HTTP-сервер для Render"""
-    app = web.Application()
-    app.add_routes([web.get('/', health_handler), web.get('/health', health_handler)])
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, host='0.0.0.0', port=port)
-    await site.start()
-    logging.info(f"🔌 Web stub server started on port {port}")
-    return runner
 # ================== ЗАПУСК ==================
 async def main():
+    for file, default in [
+        (ADMINS_FILE, [ROOT_USER_ID]),
+        (MODERATORS_FILE, []),
+        (BLOCKED_FILE, []),
+        (LOGS_FILE, []),
+        (USERS_FILE, []),
+        (TICKETS_FILE, []),
+        (GROUPS_FILE, []),
+    ]:
+        if not os.path.exists(file):
+            save_json(file, default)
+    admins = load_json(ADMINS_FILE, [])
+    if ROOT_USER_ID not in admins:
+        admins.append(ROOT_USER_ID)
+        save_json(ADMINS_FILE, admins)
+        log_action(ROOT_USER_ID, "root_auto_added", "ROOT автоматически добавлен в админы")
+    if not os.path.exists(SETTINGS_FILE):
+        save_settings(DEFAULT_SETTINGS.copy())
+    await bot.delete_webhook(drop_pending_updates=True)
+    logging.info("БОТ ЗАПУЩЕН 🟢")
+    logging.info(f"ROOT Пользователь: {ROOT_USER_ID}")
+    logging.info("Бот работает в личных сообщениях и группах!")
     try:
-        # Инициализация файлов
-        for file, default in [
-            (ADMINS_FILE, [ROOT_USER_ID]),
-            (MODERATORS_FILE, []),
-            (BLOCKED_FILE, []),
-            (LOGS_FILE, []),
-            (USERS_FILE, []),
-            (TICKETS_FILE, []),
-            (GROUPS_FILE, []),
-        ]:
-            if not os.path.exists(file):
-                save_json(file, default)
-        
-        admins = load_json(ADMINS_FILE, [])
-        if ROOT_USER_ID not in admins:
-            admins.append(ROOT_USER_ID)
-            save_json(ADMINS_FILE, admins)
-            log_action(ROOT_USER_ID, "root_auto_added", "ROOT автоматически добавлен в админы")
-        
-        if not os.path.exists(SETTINGS_FILE):
-            save_settings(DEFAULT_SETTINGS.copy())
-        
-        await bot.delete_webhook(drop_pending_updates=True)
-        
-        # 🔥 Запуск HTTP-заглушки для Render
-        port = int(os.getenv("PORT", 8000))
-        web_runner = await run_webserver_stub(port)
-        
-        logging.info("БОТ ЗАПУЩЕН 🟢")
-        logging.info(f"ROOT Пользователь: {ROOT_USER_ID}")
-        logging.info(f"Web stub listening on port {port} for Render health checks")
-        
-        # 🔁 Запускаем polling
         await dp.start_polling(bot)
-        
-    except Exception as e:
-        logging.exception(f"❌ Критическая ошибка при запуске: {e}")
-        raise
     finally:
         await bot.session.close()
-        logging.info("Бот остановлен")
+
+if __name__ == "__main__":
+    import asyncio  
+    asyncio.run(main())
