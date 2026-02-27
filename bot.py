@@ -18,12 +18,19 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.utils.keyboard import ReplyKeyboardBuilder, InlineKeyboardBuilder
 from aiogram.exceptions import TelegramForbiddenError
 from aiogram.enums import ChatMemberStatus
+# 🔥 ДОБАВЛЕНО: для HTTP-сервера Render
+from aiohttp import web
 
 # ================== КОНФИГУРАЦИЯ ==================
-BOT_TOKEN = "8390147683:AAGrG6qpYqesZIMTuJ-YontebMcc29OxXxU"
+# 🔐 ТОКЕН БЕРЁТСЯ ИЗ ПЕРЕМЕННОЙ ОКРУЖЕНИЯ (не храните в коде!)
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+if not BOT_TOKEN:
+    raise ValueError("❌ BOT_TOKEN не найден в переменных окружения!")
+
 ADMIN_KEY = "school121_admin_secret_2026"
 MODERATOR_KEY = "school121_moderator_secret_2026"
 ROOT_USER_ID = 8073934406
+
 ADMINS_FILE = "admins.json"
 MODERATORS_FILE = "moderators.json"
 BLOCKED_FILE = "blocked_users.json"
@@ -56,8 +63,25 @@ storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 router = Router()
 dp.include_router(router)
+
 flood_tracker = {}
 muted_users = {}
+
+# ================== 🔥 ВЕБ-СЕРВЕР ДЛЯ RENDER ==================
+async def health_handler(request):
+    """Эндпоинт для проверки здоровья сервиса Render"""
+    return web.Response(text="OK", status=200)
+
+async def run_webserver_stub(port: int):
+    """Запускает минимальный HTTP-сервер для Render"""
+    app = web.Application()
+    app.add_routes([web.get('/', health_handler), web.get('/health', health_handler)])
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, host='0.0.0.0', port=port)
+    await site.start()
+    logging.info(f"🔌 Web stub server started on port {port}")
+    return runner
 
 # ================== ФУНКЦИИ РАБОТЫ С ФАЙЛАМИ ==================
 def load_json(file_path: str, default=None):
@@ -284,7 +308,7 @@ def get_admin_panel_keyboard(is_admin_user: bool = True) -> ReplyKeyboardMarkup:
     builder.button(text="📤 Экспорт статистики")
     if is_admin_user:
         builder.button(text="👥 Управление админами/модераторами")
-    builder.button(text="🔙 Назад")
+        builder.button(text="🔙 Назад")
     return builder.adjust(2, 2, 2, 2 if is_admin_user else 1).as_markup(resize_keyboard=True)
 
 def get_moderation_keyboard() -> ReplyKeyboardMarkup:
@@ -434,16 +458,12 @@ async def secret_root_command(message: Message):
 @router.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext):
     user_id = message.from_user.id
-    
-    # ✅ ROOT автоматически добавляется в админы
     if is_root(user_id):
         admins = load_json(ADMINS_FILE, [])
         if user_id not in admins:
             admins.append(user_id)
             save_json(ADMINS_FILE, admins)
             log_action(user_id, "root_auto_admin", "ROOT автоматически добавлен в админы")
-    
-    # ✅ ПРОВЕРКА БЛОКИРОВКИ
     if is_blocked(user_id):
         if not is_root(user_id):
             await message.answer("❌ Вы заблокированы.")
@@ -454,8 +474,6 @@ async def cmd_start(message: Message, state: FSMContext):
                 blocked.remove(user_id)
                 save_json(BLOCKED_FILE, blocked)
                 log_action(ROOT_USER_ID, "root_auto_unblocked", "Автоматическая разблокировка ROOT")
-    
-    # ✅ ПРОВЕРКА МУТА
     if is_muted(user_id):
         if not is_root(user_id):
             until = muted_users[user_id]["until"]
@@ -464,22 +482,17 @@ async def cmd_start(message: Message, state: FSMContext):
             return
         else:
             del muted_users[user_id]
-    
     settings = get_settings()
     log_action(user_id, "start_command")
-    
-    # ✅ РЕГИСТРАЦИЯ ТОЛЬКО ДЛЯ ОБЫЧНЫХ ПОЛЬЗОВАТЕЛЕЙ
     if settings["registration_mode"] == "Phone Number" and not is_staff(user_id):
         user = get_user(user_id)
         if not user:
             await message.answer(
-                "📱 *Для продолжения нужна регистрация.*\n\nНажмите кнопку ниже, чтобы отправить номер телефона.",
+                "📱 *Для продолжения нужна регистрация.*\nНажмите кнопку ниже, чтобы отправить номер телефона.",
                 reply_markup=get_registration_keyboard(),
                 parse_mode="Markdown"
             )
             return
-    
-    # ✅ СОЗДАНИЕ ПОЛЬЗОВАТЕЛЯ ЕСЛИ НЕТ
     if not get_user(user_id):
         add_user(
             user_id=user_id,
@@ -487,8 +500,6 @@ async def cmd_start(message: Message, state: FSMContext):
             first_name=message.from_user.first_name,
             last_name=message.from_user.last_name
         )
-    
-    # ✅ ПРАВИЛЬНОЕ РАСПРЕДЕЛЕНИЕ КЛАВИАТУРЫ ПО РОЛЯМ
     if is_root(user_id):
         kb = get_root_keyboard()
         role_text = "🔴 ROOT"
@@ -501,21 +512,16 @@ async def cmd_start(message: Message, state: FSMContext):
     else:
         kb = get_user_keyboard()
         role_text = "👤 Пользователь"
-    
-    # ✅ ПРИВЕТСТВИЕ С УКАЗАНИЕМ РОЛИ
-    greeting = f"👋 Добро пожаловать! ({role_text})\n\n"
+    greeting = f"👋 Добро пожаловать! ({role_text})\n"
     greeting += "Здесь вы можете:\n"
     greeting += "• Посмотреть меню питания\n"
     greeting += "• Узнать расписание уроков\n"
     greeting += "• Узнать о предстоящих мероприятиях\n"
-    
     if settings.get("include_author_name", False):
         greeting += "\n👤 Создано: @Qwerty6260"
     if settings.get("include_school_website", False):
         greeting += "\n🌐 Официальный сайт: https://school121.oshkole.ru/"
-    
-    greeting += "\n\nВыберите раздел ниже 👇"
-    
+    greeting += "\nВыберите раздел ниже 👇"
     await message.answer(greeting, reply_markup=kb)
 
 @router.message(F.contact)
@@ -2078,8 +2084,6 @@ async def back_to_main(message: Message):
 async def global_filter(message: Message):
     user_id = message.from_user.id
     chat_type = message.chat.type
-    
-    # ✅ УДАЛЕНИЕ СООБЩЕНИЙ ЗАБЛОКИРОВАННЫХ В ГРУППАХ
     if chat_type in ['group', 'supergroup']:
         if is_blocked(user_id) and not is_root(user_id):
             try:
@@ -2091,22 +2095,16 @@ async def global_filter(message: Message):
             except Exception as e:
                 logging.error(f"Delete failed: {e}")
             return
-        
-        # Проверка прав админа бота в группе
         try:
             bot_member = await bot.get_chat_member(message.chat.id, bot.id)
             if bot_member.status not in ['administrator', 'creator']:
-                return  # Бот не админ - не может удалять
+                return
         except:
             pass
-    
-    # ✅ ПРОВЕРКА БЛОКИРОВКИ
     if is_blocked(user_id):
         if not is_root(user_id):
             await message.answer("❌ Вы заблокированы")
             return
-    
-    # ✅ ПРОВЕРКА МУТА
     if is_muted(user_id):
         if not is_root(user_id):
             until = muted_users[user_id]["until"]
@@ -2116,8 +2114,6 @@ async def global_filter(message: Message):
             else:
                 del muted_users[user_id]
             return
-    
-    # ✅ АНТИФЛУД ТОЛЬКО В ГРУППАХ
     if chat_type in ['group', 'supergroup']:
         if check_flood(user_id):
             if not is_root(user_id):
@@ -2132,26 +2128,23 @@ async def global_filter(message: Message):
                     pass
                 await message.answer(f"🔇 Слишком много сообщений! Мут на {settings['flood_mute_duration']} сек.")
                 log_action(user_id, "flood_detected", f"Muted for {settings['flood_mute_duration']}s")
-                return
-    
-    # ✅ РЕГИСТРАЦИЯ ТОЛЬКО ДЛЯ ОБЫЧНЫХ ПОЛЬЗОВАТЕЛЕЙ В ЛС
+            return
     settings = get_settings()
     if chat_type == 'private':
         if settings["registration_mode"] == "Phone Number" and not get_user(user_id) and not is_staff(user_id):
             await message.answer(
-                "📱 *Нужна регистрация.*\n\nНажмите кнопку ниже:",
+                "📱 *Нужна регистрация.*\nНажмите кнопку ниже:",
                 reply_markup=get_registration_keyboard(),
                 parse_mode="Markdown"
             )
             log_action(user_id, "unregistered_message", f"Text: {message.text[:100] if message.text else 'non-text'}")
             return
-    
-    # Логирование неизвестных команд
     if message.text and not message.text.startswith('/'):
         log_action(user_id, "unknown_message", f"Chat: {chat_type}, Text: {message.text[:100]}")
 
-# ================== ЗАПУСК ==================
+# ================== 🔥 ЗАПУСК ==================
 async def main():
+    # Инициализация файлов
     for file, default in [
         (ADMINS_FILE, [ROOT_USER_ID]),
         (MODERATORS_FILE, []),
@@ -2163,22 +2156,34 @@ async def main():
     ]:
         if not os.path.exists(file):
             save_json(file, default)
+    
     admins = load_json(ADMINS_FILE, [])
     if ROOT_USER_ID not in admins:
         admins.append(ROOT_USER_ID)
         save_json(ADMINS_FILE, admins)
         log_action(ROOT_USER_ID, "root_auto_added", "ROOT автоматически добавлен в админы")
+    
     if not os.path.exists(SETTINGS_FILE):
         save_settings(DEFAULT_SETTINGS.copy())
+    
     await bot.delete_webhook(drop_pending_updates=True)
+    
+    # 🔥 Запуск HTTP-заглушки для Render
+    port = int(os.getenv("PORT", 8000))
+    web_runner = await run_webserver_stub(port)
+    
     logging.info("БОТ ЗАПУЩЕН 🟢")
     logging.info(f"ROOT Пользователь: {ROOT_USER_ID}")
     logging.info("Бот работает в личных сообщениях и группах!")
+    logging.info(f"Web stub listening on port {port} for Render health checks")
+    
     try:
+        # 🔁 Запускаем polling
         await dp.start_polling(bot)
     finally:
+        await web_runner.cleanup()
         await bot.session.close()
+        logging.info("Бот остановлен")
 
 if __name__ == "__main__":
-    import asyncio  
     asyncio.run(main())
